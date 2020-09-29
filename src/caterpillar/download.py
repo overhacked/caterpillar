@@ -5,11 +5,13 @@ import pathlib
 import signal
 import time
 import urllib.parse
-from typing import Optional, Sequence, Tuple
+from typing import Optional, Sequence, Tuple, Any
 
 import click
 import m3u8
 import requests
+
+requests_session = None
 
 from .events import (
     EventHook,
@@ -63,7 +65,11 @@ def resumable_download(
         headers["Range"] = f"bytes={existing_bytes}-"
     try:
         logger.debug(f"GET {url}")
-        r = requests.get(url, headers=headers, stream=True, timeout=REQUESTS_TIMEOUT)
+        if requests_session is None:
+            session = requests
+        else:
+            session = requests_session
+        r = session.get(url, headers=headers, stream=True, timeout=REQUESTS_TIMEOUT)
         if r.status_code not in {200, 206}:
             logger.error(f"GET {url}: HTTP {r.status_code}")
             return False
@@ -143,9 +149,11 @@ def download_segment(
 # Returns (url, index, downloaded_path), where downloaded_path is None
 # if download failed.
 def _download_segment_mappable(
-    args: Tuple[str, int, pathlib.Path, int]
+    args: Tuple[str, int, pathlib.Path, int, Optional[Any]]
 ) -> Tuple[str, int, Optional[pathlib.Path]]:
-    url, index, directory, logging_level = args
+    global requests_session
+
+    url, index, directory, logging_level, requests_session = args
     try:
         logger.setLevel(logging_level)
         return url, index, download_segment(url, index, directory)
@@ -196,7 +204,7 @@ def download_m3u8_segments(
     logging_level = logger.getEffectiveLevel()
     for index, segment in enumerate(remote_m3u8_obj.segments):
         url = urllib.parse.urljoin(remote_m3u8_url, segment.uri)
-        download_args.append((url, index, local_m3u8_file.parent, logging_level))
+        download_args.append((url, index, local_m3u8_file.parent, logging_level, requests_session))
         local_segments.append((f"{index}.ts", segment.duration))
 
     with open(local_m3u8_file, "w", encoding="utf-8") as fp:
